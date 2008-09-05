@@ -1,0 +1,118 @@
+Index: ibrowse_http_client.erl
+===================================================================
+RCS file: /cvsroot/jungerl/jungerl/lib/ibrowse/src/ibrowse_http_client.erl,v
+retrieving revision 1.16
+diff -u -8 -p -r1.16 ibrowse_http_client.erl
+--- ibrowse_http_client.erl	27 Feb 2008 23:39:23 -0000	1.16
++++ ibrowse_http_client.erl	3 Mar 2008 07:09:20 -0000
+@@ -447,16 +447,27 @@ handle_sock_closed(#state{reply_buffer=B
+ do_connect(Host, Port, _Options, #state{is_ssl=true, ssl_options=SSLOptions}, Timeout) ->
+     ssl:connect(Host, Port, [{active, false} | SSLOptions], Timeout);
+ do_connect(Host, Port, _Options, _State, Timeout) ->
+     gen_tcp:connect(Host, Port, [{active, false}], Timeout).
+ 
+ do_send(Sock, Req, true)  ->  ssl:send(Sock, Req);
+ do_send(Sock, Req, false) ->  gen_tcp:send(Sock, Req).
+ 
++do_send_body(Sock, Body, IsSSL) when is_function(Body) ->
++    case Body() of
++	{ok, Data} ->
++	    do_send(Sock, Data, IsSSL),
++	    do_send_body(Sock, Body, IsSSL);
++	eof -> ok;
++	Err -> Err
++    end;
++do_send_body(Sock, Body, IsSSL) ->
++    do_send(Sock, Body, IsSSL).
++
+ do_close(Sock, true)  ->  ssl:close(Sock);
+ do_close(Sock, false) ->  gen_tcp:close(Sock).
+ 
+ do_setopts(Sock, Opts, true)  ->  ssl:setopts(Sock, Opts);
+ do_setopts(Sock, Opts, false) ->  inet:setopts(Sock, Opts).
+ 
+ check_ssl_options(Options, State) ->
+     case get_value(is_ssl, Options, false) of
+@@ -476,28 +487,33 @@ send_req_1(Url, Headers, Method, Body, O
+ 			  false ->
+ 			      case Port of
+ 				  80 -> Host;
+ 				  _ -> [Host, ":", integer_to_list(Port)]
+ 			      end;
+ 			  {value, {_, Host_h_val}} ->
+ 			      Host_h_val
+ 		      end,
+-    Req = make_request(Method, 
+-		       [{"Host", HostHeaderValue} | Headers_1],
+-		       AbsPath, RelPath, Body, Options, State#state.use_proxy),
++    {Req, Body_1} = make_request(Method, 
++				 [{"Host", HostHeaderValue} | Headers_1],
++				 AbsPath, RelPath, Body, Options, State#state.use_proxy),
+     case get(my_trace_flag) of %%Avoid the binary operations if trace is not on...
+ 	true ->
+ 	    NReq = binary_to_list(list_to_binary(Req)),
+ 	    do_trace("Sending request: ~n"
+ 		     "--- Request Begin ---~n~s~n"
+ 		     "--- Request End ---~n", [NReq]);
+ 	_ -> ok
+     end,
+-    SndRes = do_send(Sock, Req, State#state.is_ssl),
++    SndRes = case do_send(Sock, Req, State#state.is_ssl) of
++		 ok -> do_send_body(Sock, Body_1, State#state.is_ssl);
++		 Err -> 
++		     io:format("Err: ~p~n", [Err]),
++		     Err
++	     end,
+     do_setopts(Sock, [{active, true}], State#state.is_ssl),
+     SndRes.
+ 
+ add_auth_headers(#url{username = User,
+ 		      password = UPw}, 
+ 		 Options,
+ 		 Headers, 
+ 		 #state{use_proxy = UseProxy,
+@@ -545,23 +561,23 @@ e(X) when X>25, X<52     -> X+71;
+ e(X) when X>51, X<62     -> X-4;
+ e(62)                    -> $+;
+ e(63)                    -> $/;
+ e(X)                     -> exit({bad_encode_base64_token, X}).
+ 
+ make_request(Method, Headers, AbsPath, RelPath, Body, Options, UseProxy) ->
+     HttpVsn = http_vsn_string(get_value(http_vsn, Options, {1,1})),
+     Headers_1 = case get_value(content_length, Headers, false) of
+-		    false when (Body == []) or (Body == <<>>) ->
++		    false when (Body == []) or (Body == <<>>) or is_function(Body) ->
+ 			Headers;
+ 		    false when is_binary(Body) ->
+ 			[{"content-length", integer_to_list(size(Body))} | Headers];
+ 		    false ->
+ 			[{"content-length", integer_to_list(length(Body))} | Headers];
+-		    true ->
++		    _X ->
+ 			Headers
+ 		end,
+     {Headers_2, Body_1} = 
+ 	case get_value(transfer_encoding, Options, false) of
+ 	    false ->
+ 		{Headers_1, Body};
+ 	    {chunked, ChunkSize} ->
+ 		{[{X, Y} || {X, Y} <- Headers_1, 
+@@ -573,17 +589,17 @@ make_request(Method, Headers, AbsPath, R
+ 	end,
+     Headers_3 = cons_headers(Headers_2),
+     Uri = case get_value(use_absolute_uri, Options, false) or UseProxy of
+ 	      true ->
+ 		  AbsPath;
+ 	      false -> 
+ 		  RelPath
+ 	  end,
+-    [method(Method), " ", Uri, " ", HttpVsn, crnl(), Headers_3, crnl(), Body_1].
++    {[method(Method), " ", Uri, " ", HttpVsn, crnl(), Headers_3, crnl()], Body_1}.
+ 
+ http_vsn_string({0,9}) -> "HTTP/0.9";
+ http_vsn_string({1,0}) -> "HTTP/1.0";
+ http_vsn_string({1,1}) -> "HTTP/1.1".
+ 
+ cons_headers(Headers) ->
+     cons_headers(Headers, []).
+ cons_headers([], Acc) ->
