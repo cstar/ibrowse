@@ -390,6 +390,7 @@ do_trace(_, Fmt, Args) ->
 	      [printable_date(), 
 	       get(ibrowse_trace_token) | Args]).
 -else.
+%-ifdef(DEBUG).
 do_trace(true, Fmt, Args) ->
     io:format("~s -- (~s) - "++Fmt,
 	      [printable_date(), 
