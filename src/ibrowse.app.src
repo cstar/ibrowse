@@ -6,7 +6,7 @@
 		     ibrowse_app, 
 		     ibrowse_sup, 
 		     ibrowse_lib,
-		     ibrowse_lb ]},
+		     ibrowse_lb, rfc4627 ]},
          {registered, []},
          {applications, [kernel,stdlib,sasl]},
 	 {env, []},
